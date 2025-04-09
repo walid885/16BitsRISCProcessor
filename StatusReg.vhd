@@ -7,8 +7,8 @@ entity status_register is
         clk     : in  STD_LOGIC;                     -- Clock signal
         rst     : in  STD_LOGIC;                     -- Reset signal
         ce      : in  STD_LOGIC;                     -- Clock enable
-        i       : in  STD_LOGIC_VECTOR(3 downto 0);  -- Input status bits (Z,N,C,V)
-        o       : out STD_LOGIC_VECTOR(3 downto 0)   -- Output status bits
+        input       : in  STD_LOGIC_VECTOR(3 downto 0);  -- Input status bits (Z,N,C,V)
+        output       : out STD_LOGIC_VECTOR(3 downto 0)   -- Output status bits
     );
 end status_register;
 
@@ -22,11 +22,11 @@ begin
             status <= (others => '0');
         elsif rising_edge(clk) then
             if ce = '1' then
-                status <= i;
+                status <= input;
             end if;
         end if;
     end process;
     
     -- Output assignment
-    o <= status;
+    output <= status;
 end Behavioral;

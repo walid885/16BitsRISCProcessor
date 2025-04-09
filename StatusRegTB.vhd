@@ -35,8 +35,8 @@ begin
         clk => clk,
         rst => rst,
         ce  => ce,
-        input   => i,
-        output   => o
+        input   => input,
+        output   => output
     );
     
     -- Clock process
