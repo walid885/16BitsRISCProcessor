@@ -5,7 +5,7 @@ use IEEE.NUMERIC_STD.ALL;
 entity alu is
     Port (
         op      : in  STD_LOGIC_VECTOR(3 downto 0);    -- Operation code
-        a       : in  STD_LOGIC_VECTOR(15 downto 0);   -- Input operand A (typically Accumulator)
+        a       : in  STD_LOGIC_VECTOR(15 downto 0);   -- Input operand A (Accumulator)
         b       : in  STD_LOGIC_VECTOR(15 downto 0);   -- Input operand B
         y       : out STD_LOGIC_VECTOR(15 downto 0);   -- Result output
         z_flag  : out STD_LOGIC;                       -- Zero flag
@@ -16,81 +16,49 @@ entity alu is
 end alu;
 
 architecture Behavioral of alu is
-    -- Opcodes as per the specification
-    constant ADD_OP  : STD_LOGIC_VECTOR(3 downto 0) := "1000";  -- Addition
-    constant SUB_OP  : STD_LOGIC_VECTOR(3 downto 0) := "1001";  -- Subtraction
-    constant AND_OP  : STD_LOGIC_VECTOR(3 downto 0) := "1010";  -- AND
-    constant OR_OP   : STD_LOGIC_VECTOR(3 downto 0) := "1011";  -- OR
-    constant XOR_OP  : STD_LOGIC_VECTOR(3 downto 0) := "1100";  -- XOR
-    constant NOT_OP  : STD_LOGIC_VECTOR(3 downto 0) := "1101";  -- NOT
-    constant LSL_OP  : STD_LOGIC_VECTOR(3 downto 0) := "1110";  -- Logical Shift Left
-    constant LSR_OP  : STD_LOGIC_VECTOR(3 downto 0) := "1111";  -- Logical Shift Right
-    constant MTA_OP  : STD_LOGIC_VECTOR(3 downto 0) := "0000";  -- Move to Accumulator
-    constant MTR_OP  : STD_LOGIC_VECTOR(3 downto 0) := "0001";  -- Move to Register
-    constant CAL_OP  : STD_LOGIC_VECTOR(3 downto 0) := "0010";  -- Call
-    constant RET_OP  : STD_LOGIC_VECTOR(3 downto 0) := "0011";  -- Return
+    -- Define opcodes as constants for better readability
+    constant AND_OP  : STD_LOGIC_VECTOR(3 downto 0) := "0000";  -- AND (acc ? acc AND rX/X)
+    constant OR_OP   : STD_LOGIC_VECTOR(3 downto 0) := "0001";  -- OR  (acc ? acc OR rX/X)
+    constant XOR_OP  : STD_LOGIC_VECTOR(3 downto 0) := "0010";  -- XOR (acc ? acc XOR rX/X)
+    constant NOT_OP  : STD_LOGIC_VECTOR(3 downto 0) := "0011";  -- NOT (acc ? NOT rX/X)
+    constant ADD_OP  : STD_LOGIC_VECTOR(3 downto 0) := "0100";  -- ADD (acc ? acc + rX/X)
+    constant SUB_OP  : STD_LOGIC_VECTOR(3 downto 0) := "0101";  -- SUB (acc ? acc - rX/X)
+    constant LSL_OP  : STD_LOGIC_VECTOR(3 downto 0) := "0110";  -- LSL (acc ? acc << rX/X)
+    constant LSR_OP  : STD_LOGIC_VECTOR(3 downto 0) := "0111";  -- LSR (acc ? acc >> rX/X)
+    constant LDA_OP  : STD_LOGIC_VECTOR(3 downto 0) := "1000";  -- LDA (acc ? [rX/X])
+    constant STA_OP  : STD_LOGIC_VECTOR(3 downto 0) := "1001";  -- STA ([rX/X] ? acc)
+    constant MTA_OP  : STD_LOGIC_VECTOR(3 downto 0) := "1010";  -- MTA (acc ? rX/X)
+    constant MTR_OP  : STD_LOGIC_VECTOR(3 downto 0) := "1011";  -- MTR (rX ? acc)
+    constant JRP_OP  : STD_LOGIC_VECTOR(3 downto 0) := "1100";  -- MTR (rX ? acc)
+    constant JRN_OP  : STD_LOGIC_VECTOR(3 downto 0) := "1101";  -- MTR (rX ? acc)
+    constant JPR_OP  : STD_LOGIC_VECTOR(3 downto 0) := "1110";  -- MTR (rX ? acc)
+    constant CALL_OP  : STD_LOGIC_VECTOR(3 downto 0) := "1111";  -- MTR (rX ? acc)
     
     -- Internal signals
-    signal result    : STD_LOGIC_VECTOR(15 downto 0);
-    signal temp_z    : STD_LOGIC;
-    signal temp_n    : STD_LOGIC;
-    signal temp_c    : STD_LOGIC;
-    signal temp_v    : STD_LOGIC;
+    signal result      : STD_LOGIC_VECTOR(15 downto 0);
+    signal zero_result : STD_LOGIC;
+    signal neg_result  : STD_LOGIC;
+    signal carry_out   : STD_LOGIC;
+    signal overflow    : STD_LOGIC;
 begin
     process(op, a, b)
-        -- Extended results for arithmetic operations
-        variable add_result : STD_LOGIC_VECTOR(16 downto 0);
-        variable sub_result : STD_LOGIC_VECTOR(16 downto 0);
-        -- For shift operations
-        variable shift_amt : integer;
-        variable shift_carry : STD_LOGIC;
-        variable shift_overflow : STD_LOGIC;
-        -- Original sign bits for overflow detection
-        variable a_sign, b_sign, res_sign : STD_LOGIC;
+        variable temp_result : unsigned(16 downto 0); -- For intermediate calculations only
+        variable shift_amt   : integer;
+        variable old_msb     : STD_LOGIC;
+        variable new_msb     : STD_LOGIC;
     begin
         -- Default values
-        result <= (others => '0');
-        temp_z <= '0';
-        temp_n <= '0';
-        temp_c <= '0';
-        temp_v <= '0';
-        
+        result <= (x"0000");
+        zero_result <= '0';
+        neg_result <= '0';
+        carry_out <= '0';
+        overflow <= '0';
+
         case op is
-            when ADD_OP =>
-                -- Addition with carry
-                add_result := std_logic_vector(('0' & unsigned(a)) + ('0' & unsigned(b)));
-                result <= add_result(15 downto 0);
-                
-                -- Set flags
-                a_sign := a(15);
-                b_sign := b(15);
-                res_sign := add_result(15);
-                
-                -- Carry flag
-                temp_c <= add_result(16);
-                
-                -- Overflow flag - happens when both operands have same sign but result has different sign
-                temp_v <= (a_sign and b_sign and not res_sign) or (not a_sign and not b_sign and res_sign);
-                
-            when SUB_OP =>
-                -- Subtraction: A - B
-                sub_result := std_logic_vector(('0' & unsigned(a)) - ('0' & unsigned(b)));
-                result <= sub_result(15 downto 0);
-                
-                -- Set flags
-                a_sign := a(15);
-                b_sign := b(15);
-                res_sign := sub_result(15);
-                
-                -- Carry flag (set when no borrow needed)
-                temp_c <= not sub_result(16);
-                
-                -- Overflow flag - happens when operands have different signs and result sign matches subtracted operand
-                temp_v <= (a_sign and not b_sign and not res_sign) or (not a_sign and b_sign and res_sign);
-                
             when AND_OP =>
                 -- Bitwise AND
                 result <= a and b;
+                -- Logical operations only affect Z and N flags
                 
             when OR_OP =>
                 -- Bitwise OR
@@ -101,104 +69,140 @@ begin
                 result <= a xor b;
                 
             when NOT_OP =>
-                -- Bitwise NOT
+                -- Bitwise NOT (of B)
                 result <= not b;
+                -- Make sure to set negative flag correctly
+                neg_result <= not b(15);
+                
+            when ADD_OP =>
+                -- Addition operation (without using 17-bit calculation directly)
+                -- Calculate in a 16-bit compliant way
+                result <= std_logic_vector(unsigned(a) + unsigned(b));
+                
+                -- Carry detection using comparison
+                if (unsigned(a) > unsigned(not b)) then
+                    carry_out <= '1';
+                end if;
+                
+                -- Overflow detection for signed addition
+                if ((a(15) = '0' and b(15) = '0' and result(15) = '1') or
+                    (a(15) = '1' and b(15) = '1' and result(15) = '0')) then
+                    overflow <= '1';
+                end if;
+                
+            when SUB_OP =>
+                -- Subtraction operation
+                result <= std_logic_vector(unsigned(a) - unsigned(b));
+                
+                -- Borrow detection (inverse of carry)
+                if (unsigned(a) >= unsigned(b)) then
+                    carry_out <= '1';  -- No borrow needed
+                else
+                    carry_out <= '0';  -- Borrow needed
+                end if;
+                
+                -- Overflow detection for signed subtraction
+                if ((a(15) = '0' and b(15) = '1' and result(15) = '1') or
+                    (a(15) = '1' and b(15) = '0' and result(15) = '0')) then
+                    overflow <= '1';
+                end if;
                 
             when LSL_OP =>
                 -- Logical shift left
-                shift_amt := to_integer(unsigned(b(4 downto 0))); -- Use only 5 bits for shift amount
-                shift_carry := '0';
-                shift_overflow := '0';
+                shift_amt := to_integer(unsigned(b(4 downto 0))); -- Use only 5 bits
+                old_msb := a(15);
                 
                 if shift_amt = 0 then
-                    -- No shift
                     result <= a;
                 elsif shift_amt >= 16 then
-                    -- Shift by 16 or more results in all zeros
-                    result <= (others => '0');
-                    -- Carry is set if any bit in A was 1
+                    -- All bits shifted out, result is zero
+                    result <= (x"0000");
+                    
+                    -- If any bit was 1, carry is set
                     if unsigned(a) /= 0 then
-                        shift_carry := '1';
+                        carry_out <= '1';
                     end if;
-                    -- Overflow if original MSB was 1
-                    shift_overflow := a(15);
                 else
                     -- Normal shift operation
                     result <= std_logic_vector(shift_left(unsigned(a), shift_amt));
                     
-                    -- Check for carry (any of the bits shifted out was 1)
-                    if unsigned(a(15 downto 16-shift_amt)) /= 0 then
-                        shift_carry := '1';
-                    end if;
-                    
-                    -- Overflow if sign bit changes after shift
-                    if a(15) /= result(15) then
-                        shift_overflow := '1';
+                    -- Set carry if any bits shift out
+                    if shift_amt > 0 and unsigned(a(15 downto 16-shift_amt)) /= 0 then
+                        carry_out <= '1';
                     end if;
                 end if;
                 
-                temp_c <= shift_carry;
-                temp_v <= shift_overflow;
+                -- Set overflow if sign bit changes
+                new_msb := result(15);
+                if old_msb /= new_msb then
+                    overflow <= '1';
+                end if;
                 
             when LSR_OP =>
                 -- Logical shift right
-                shift_amt := to_integer(unsigned(b(4 downto 0))); -- Use only 5 bits for shift amount
-                shift_carry := '0';
-                shift_overflow := '0';
+                shift_amt := to_integer(unsigned(b(4 downto 0))); -- Use only 5 bits
+                old_msb := a(15);
                 
                 if shift_amt = 0 then
-                    -- No shift
                     result <= a;
                 elsif shift_amt >= 16 then
-                    -- Shift by 16 or more results in all zeros
-                    result <= (others => '0');
-                    -- Carry is set if any bit in A was 1
+                    -- All bits shifted out, result is zero
+                    result <= (x"0000");
+                    
+                    -- If any bit was 1, carry is set
                     if unsigned(a) /= 0 then
-                        shift_carry := '1';
+                        carry_out <= '1';
                     end if;
-                    -- Overflow if original MSB was 1 (because it becomes 0)
-                    shift_overflow := a(15);
                 else
                     -- Normal shift operation
                     result <= std_logic_vector(shift_right(unsigned(a), shift_amt));
                     
-                    -- Check for carry (any of the bits shifted out was 1)
-                    if unsigned(a(shift_amt-1 downto 0)) /= 0 then
-                        shift_carry := '1';
-                    end if;
-                    
-                    -- Overflow if sign bit changes after shift (for LSR, if bit 15 was 1)
-                    if a(15) = '1' and shift_amt > 0 then
-                        shift_overflow := '1';
+                    -- Set carry if any bits shift out
+                    if shift_amt > 0 and unsigned(a(shift_amt-1 downto 0)) /= 0 then
+                        carry_out <= '1';
                     end if;
                 end if;
                 
-                temp_c <= shift_carry;
-                temp_v <= shift_overflow;
+                -- Set overflow if sign bit changes
+                new_msb := result(15);
+                if old_msb /= new_msb then
+                    overflow <= '1';
+                end if;
                 
-            when MTA_OP | MTR_OP | CAL_OP | RET_OP =>
-                -- Move operations, just pass B through
+            when MTA_OP | LDA_OP =>
+                -- Move to Accumulator (or Load Accumulator)
                 result <= b;
+                -- For MTA, need to set negative flag correctly
+                neg_result <= b(15);
+                
+            when MTR_OP | STA_OP =>
+                -- Move to Register (or Store Accumulator)
+                result <= a;
+                -- Flags are not typically affected
                 
             when others =>
-                -- Default case
-                result <= (others => '0');
+                -- For any undefined operation, result is 0
+                result <= (x"0000");
         end case;
         
-        -- Set Z and N flags based on result
+        -- Common flag calculations for all operations
+        -- Zero flag: Set if result is all zeros
         if unsigned(result) = 0 then
-            temp_z <= '1';
-        else
-            temp_z <= '0';
+            zero_result <= '1';
+        else 
+            zero_result <= '0';
         end if;
         
-        temp_n <= result(15);
+        -- Negative flag: Set if MSB of result is 1 (unless already set)
+        if neg_result = '0' then
+            neg_result <= result(15);
+        end if;
     end process;
     
-    -- Output the result and flags
+    -- Assign output signals
     y <= result;
-    z_flag <= temp_z;
-    n_flag <= temp_n;
-    c_flag <= temp_c;
-    v_flag <= temp_v;
+    z_flag <= zero_result;
+    n_flag <= neg_result;
+    c_flag <= carry_out;
+    v_flag <= overflow;
 end Behavioral;
