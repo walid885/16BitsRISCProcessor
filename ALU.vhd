@@ -32,54 +32,61 @@ architecture Behavioral of alu is
     
     -- Internal signals
     signal result    : STD_LOGIC_VECTOR(15 downto 0);
-    signal add_result: STD_LOGIC_VECTOR(16 downto 0);  -- One bit wider for carry
-    signal sub_result: STD_LOGIC_VECTOR(16 downto 0);  -- One bit wider for borrow
-    
-    -- For shift operations
-    signal shift_left_result : STD_LOGIC_VECTOR(31 downto 0);
-    signal shift_right_result : STD_LOGIC_VECTOR(31 downto 0);
-    
-    -- Original sign bits for overflow detection
-    signal a_sign, b_sign, result_sign : STD_LOGIC;
+    signal temp_z    : STD_LOGIC;
+    signal temp_n    : STD_LOGIC;
+    signal temp_c    : STD_LOGIC;
+    signal temp_v    : STD_LOGIC;
 begin
-    -- Compute operation results
     process(op, a, b)
-        variable shift_amt : INTEGER;  -- Changed to variable
+        -- Extended results for arithmetic operations
+        variable add_result : STD_LOGIC_VECTOR(16 downto 0);
+        variable sub_result : STD_LOGIC_VECTOR(16 downto 0);
+        -- For shift operations
+        variable shift_amt : integer;
+        variable shift_carry : STD_LOGIC;
+        variable shift_overflow : STD_LOGIC;
+        -- Original sign bits for overflow detection
+        variable a_sign, b_sign, res_sign : STD_LOGIC;
     begin
         -- Default values
-        add_result <= (others => '0');
-        sub_result <= (others => '0');
         result <= (others => '0');
-        c_flag <= '0';
-        v_flag <= '0';
-        
-        -- Determine sign bits for overflow detection
-        a_sign <= a(15);
+        temp_z <= '0';
+        temp_n <= '0';
+        temp_c <= '0';
+        temp_v <= '0';
         
         case op is
             when ADD_OP =>
                 -- Addition with carry
-                add_result <= std_logic_vector(('0' & unsigned(a)) + ('0' & unsigned(b)));
+                add_result := std_logic_vector(('0' & unsigned(a)) + ('0' & unsigned(b)));
                 result <= add_result(15 downto 0);
-                c_flag <= add_result(16);  -- Carry out
                 
-                -- Overflow detection for addition
-                b_sign <= b(15);
-                result_sign <= add_result(15);
-                v_flag <= (a_sign and b_sign and not result_sign) or 
-                          (not a_sign and not b_sign and result_sign);
+                -- Set flags
+                a_sign := a(15);
+                b_sign := b(15);
+                res_sign := add_result(15);
+                
+                -- Carry flag
+                temp_c <= add_result(16);
+                
+                -- Overflow flag - happens when both operands have same sign but result has different sign
+                temp_v <= (a_sign and b_sign and not res_sign) or (not a_sign and not b_sign and res_sign);
                 
             when SUB_OP =>
-                -- Subtraction with borrow
-                sub_result <= std_logic_vector(('0' & unsigned(a)) - ('0' & unsigned(b)));
+                -- Subtraction: A - B
+                sub_result := std_logic_vector(('0' & unsigned(a)) - ('0' & unsigned(b)));
                 result <= sub_result(15 downto 0);
-                c_flag <= not sub_result(16);  -- Borrow out (inverted)
                 
-                -- Overflow detection for subtraction
-                b_sign <= not b(15);  -- Invert sign for subtraction
-                result_sign <= sub_result(15);
-                v_flag <= (a_sign and b_sign and not result_sign) or 
-                          (not a_sign and not b_sign and result_sign);
+                -- Set flags
+                a_sign := a(15);
+                b_sign := b(15);
+                res_sign := sub_result(15);
+                
+                -- Carry flag (set when no borrow needed)
+                temp_c <= not sub_result(16);
+                
+                -- Overflow flag - happens when operands have different signs and result sign matches subtracted operand
+                temp_v <= (a_sign and not b_sign and not res_sign) or (not a_sign and b_sign and res_sign);
                 
             when AND_OP =>
                 -- Bitwise AND
@@ -94,54 +101,80 @@ begin
                 result <= a xor b;
                 
             when NOT_OP =>
-                -- Bitwise NOT (one's complement)
+                -- Bitwise NOT
                 result <= not b;
                 
             when LSL_OP =>
                 -- Logical shift left
-                shift_amt := to_integer(unsigned(b(4 downto 0)));  -- Use only lower 5 bits for shift amount
+                shift_amt := to_integer(unsigned(b(4 downto 0))); -- Use only 5 bits for shift amount
+                shift_carry := '0';
+                shift_overflow := '0';
                 
-                -- Extended shift result for carry detection
-                shift_left_result <= std_logic_vector(unsigned(a & X"0000") sll shift_amt);
-                result <= shift_left_result(31 downto 16);
-                
-                -- Set carry if any bit was shifted out
-                if shift_amt > 0 and shift_amt <= 16 then
-                    if (unsigned(a(15 downto 16-shift_amt)) /= 0) then
-                        c_flag <= '1';
-                    end if;
-                elsif shift_amt > 16 then
-                    -- If shift amount is greater than word size, check if any bit was 1
+                if shift_amt = 0 then
+                    -- No shift
+                    result <= a;
+                elsif shift_amt >= 16 then
+                    -- Shift by 16 or more results in all zeros
+                    result <= (others => '0');
+                    -- Carry is set if any bit in A was 1
                     if unsigned(a) /= 0 then
-                        c_flag <= '1';
+                        shift_carry := '1';
+                    end if;
+                    -- Overflow if original MSB was 1
+                    shift_overflow := a(15);
+                else
+                    -- Normal shift operation
+                    result <= std_logic_vector(shift_left(unsigned(a), shift_amt));
+                    
+                    -- Check for carry (any of the bits shifted out was 1)
+                    if unsigned(a(15 downto 16-shift_amt)) /= 0 then
+                        shift_carry := '1';
+                    end if;
+                    
+                    -- Overflow if sign bit changes after shift
+                    if a(15) /= result(15) then
+                        shift_overflow := '1';
                     end if;
                 end if;
                 
-                -- Overflow if sign bit changes
-                v_flag <= a(15) xor result(15);
+                temp_c <= shift_carry;
+                temp_v <= shift_overflow;
                 
             when LSR_OP =>
                 -- Logical shift right
-                shift_amt := to_integer(unsigned(b(4 downto 0)));  -- Use only lower 5 bits for shift amount
+                shift_amt := to_integer(unsigned(b(4 downto 0))); -- Use only 5 bits for shift amount
+                shift_carry := '0';
+                shift_overflow := '0';
                 
-                -- Extended shift result for carry detection
-                shift_right_result <= std_logic_vector(unsigned(X"0000" & a) srl shift_amt);
-                result <= shift_right_result(15 downto 0);
-                
-                -- Set carry if any bit was shifted out
-                if shift_amt > 0 and shift_amt <= 16 then
-                    if (unsigned(a(shift_amt-1 downto 0)) /= 0) then
-                        c_flag <= '1';
-                    end if;
-                elsif shift_amt > 16 then
-                    -- If shift amount is greater than word size, check if any bit was 1
+                if shift_amt = 0 then
+                    -- No shift
+                    result <= a;
+                elsif shift_amt >= 16 then
+                    -- Shift by 16 or more results in all zeros
+                    result <= (others => '0');
+                    -- Carry is set if any bit in A was 1
                     if unsigned(a) /= 0 then
-                        c_flag <= '1';
+                        shift_carry := '1';
+                    end if;
+                    -- Overflow if original MSB was 1 (because it becomes 0)
+                    shift_overflow := a(15);
+                else
+                    -- Normal shift operation
+                    result <= std_logic_vector(shift_right(unsigned(a), shift_amt));
+                    
+                    -- Check for carry (any of the bits shifted out was 1)
+                    if unsigned(a(shift_amt-1 downto 0)) /= 0 then
+                        shift_carry := '1';
+                    end if;
+                    
+                    -- Overflow if sign bit changes after shift (for LSR, if bit 15 was 1)
+                    if a(15) = '1' and shift_amt > 0 then
+                        shift_overflow := '1';
                     end if;
                 end if;
                 
-                -- Overflow if sign bit changes (for logical shifts, will be 0 if shifted enough)
-                v_flag <= a(15) xor result(15);
+                temp_c <= shift_carry;
+                temp_v <= shift_overflow;
                 
             when MTA_OP | MTR_OP | CAL_OP | RET_OP =>
                 -- Move operations, just pass B through
@@ -151,12 +184,21 @@ begin
                 -- Default case
                 result <= (others => '0');
         end case;
+        
+        -- Set Z and N flags based on result
+        if unsigned(result) = 0 then
+            temp_z <= '1';
+        else
+            temp_z <= '0';
+        end if;
+        
+        temp_n <= result(15);
     end process;
     
-    -- Set flags based on result
-    z_flag <= '1' when unsigned(result) = 0 else '0';  -- Zero flag
-    n_flag <= result(15);  -- Negative flag (sign bit)
-    
-    -- Output the result
+    -- Output the result and flags
     y <= result;
+    z_flag <= temp_z;
+    n_flag <= temp_n;
+    c_flag <= temp_c;
+    v_flag <= temp_v;
 end Behavioral;
